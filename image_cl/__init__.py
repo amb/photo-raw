@@ -86,28 +86,31 @@ class CLDev:
     """OpenCL device class for 2D-3D image array processing"""
 
     def __init__(self, dev_id):
+        print("Initializing OpenCL library...")
         self.ctx = cl.clCreateContext()
-        for dev in self.ctx.devices:
-            print(dev.name)
+        for i, dev in enumerate(self.ctx.devices):
+            print(f"Device [{i}]: {dev.name}")
 
         dvids = cl.clGetDeviceIDs()
         # print(len(dvids))
         d = dvids[dev_id]
         cl.clGetDeviceInfo(d, cl.cl_device_info.CL_DEVICE_NAME)
         cl.clGetDeviceInfo(d, cl.cl_device_info.CL_DEVICE_TYPE)
-        print(f"Device {dev_id} available:", d.available)
+        print(f"Using device {dev_id}. Checking if it's available:", d.available)
         print("Max work item sizes:", d.max_work_item_sizes)
 
-        print("Supported image formats for RGBA:")
+        # print("Supported image formats for RGBA:")
         self.supported_rgba = [
             i.image_channel_data_type
             for i in cl.clGetSupportedImageFormats(self.ctx)
             if i.image_channel_order == cl.cl_channel_order.CL_RGBA
         ]
-        print(self.supported_rgba)
+        # print(self.supported_rgba)
 
         # Ensure we have RGBA float32
-        assert cl.cl_channel_type.CL_FLOAT in self.supported_rgba
+        assert (
+            cl.cl_channel_type.CL_FLOAT in self.supported_rgba
+        ), "Your hardware doesn't support floating point data for RGBA images"
 
         self.queue = cl.clCreateCommandQueue(self.ctx)
         self.kernels = {}

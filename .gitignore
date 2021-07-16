@@ -3,3 +3,4 @@ raws/
 test/
 .vscode/
 *.pyc
+__pycache__/
