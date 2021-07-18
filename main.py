@@ -196,7 +196,7 @@ def stereographic_to_equirect(pix):
         const float fwidth = (float)(width);
         const float fheight = (float)(height);
 
-        // const float up_angle = 30.0 * M_PI / 360.0;
+        const float up_angle = 30.0 * M_PI / 180.0;
 
         const float EWIDTH = 2048.0;
         const float EHEIGHT = 1024.0;
@@ -209,20 +209,24 @@ def stereographic_to_equirect(pix):
         // ~30 pitch, -2 roll
         const float FOV = M_PI * 99.1 / 180.0;
 
-        // Polar angles for equidistant
-        float theta = 2.0 * M_PI * (map_x / fwidth - 0.5); // -pi to pi
-        float phi = M_PI * (map_y / fheight - 0.5); // -pi/2 to pi/2
-
-        // Vector in 3D space
+        // Calculate vector in equirectangular surface
+        float theta = 2.0 * M_PI * (map_x / fwidth - 0.5); // -PI .. PI
+        float phi = M_PI * (map_y / fheight - 0.5); // -PI/2 .. PI/2
         float px = cos(phi) * sin(theta);
         float py = cos(phi) * cos(theta);
         float pz = sin(phi);
 
-        // Calculate fisheye angle and radius
-        theta = atan2(pz, px);
-        phi = atan2(sqrt(px*px + pz*pz), py);
+        // Rotate around x-axis
+        float pyn = py * cos(up_angle) - pz * sin(up_angle);
+        float pzn = py * sin(up_angle) + pz * cos(up_angle);
+        py = pyn;
+        pz = pzn;
 
-        // https://wiki.panotools.org/Fisheye_Projection
+        // Calculate equirectangular angle and radius
+        theta = atan2(pz, px); // angle of vector to y-plane
+        phi = atan2(sqrt(px*px + pz*pz), py); // angle of vector to x-plane
+
+        // https://en.wikipedia.org/wiki/Fisheye_lens#Mapping_function
         // float r = fwidth * phi / FOV;
         float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
 
