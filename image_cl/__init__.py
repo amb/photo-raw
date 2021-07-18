@@ -27,23 +27,21 @@ class CLImage(CLType):
         assert self.width % 8 == 0, "Image width must be divisible by 8"
         assert self.height % 8 == 0, "Image height must be divisible by 8"
         # Default memflags are CL_MEM_READ_WRITE
-        self.data = cl.clCreateImage2D(
-            cldev.ctx, self.width, self.height, imgformat=cldev.image_format
-        )
+        self.data = cl.clCreateImage2D(cldev.ctx, self.width, self.height, imgformat=cldev.image_format)
 
     def from_numpy(self, source):
+        assert source.shape[2] == 4, "Array shape needs to be (height, width, 4)"
         h, w = source.shape[0], source.shape[1]
         if h % 8 != 0 or w % 8 != 0:
-            padding = np.zeros(
-                (min_ptwo(h, 8), min_ptwo(w, 8), source.shape[2]), dtype=source.dtype
-            )
+            padding = np.zeros((min_ptwo(h, 8), min_ptwo(w, 8), source.shape[2]), dtype=source.dtype)
             padding[:h, :w] = source[:, :]
             source = padding
-        ary = np.ascontiguousarray(source)
+        assert source.dtype == np.float32
+        ary = np.ascontiguousarray(source, dtype=np.float32)
         if ary.__array_interface__["strides"]:
             raise ValueError("I don't know how to handle strided arrays yet.")
         ptr = void_p(ary.__array_interface__["data"][0])
-        # print(self.data._height, self.data._width, ary.shape)
+        # print(self.data._height, self.data._width, ary.shape, ary.flags['C_CONTIGUOUS'])
         evt = cl.clEnqueueWriteImage(
             self.cldev.queue, self.data, ptr, (0, 0, 0), (ary.shape[1], ary.shape[0], 1), 0, 0
         )
@@ -75,9 +73,7 @@ class CLFloat2D(CLType):
         self.data = res
 
     def to_numpy(self):
-        res, evt = cl.buffer_to_ndarray(
-            self.cldev.queue, self.data, dtype=np.float32, shape=self.shape
-        )
+        res, evt = cl.buffer_to_ndarray(self.cldev.queue, self.data, dtype=np.float32, shape=self.shape)
         evt.wait()
         return res
 
@@ -116,9 +112,7 @@ class CLDev:
         self.kernels = {}
 
         self.mem_flags = cl.cl_mem_flags
-        self.image_format = cl.cl_image_format(
-            cl.cl_channel_order.CL_RGBA, cl.cl_channel_type.CL_FLOAT
-        )
+        self.image_format = cl.cl_image_format(cl.cl_channel_order.CL_RGBA, cl.cl_channel_type.CL_FLOAT)
 
     def build(self, name, source, argtypes=None):
         "Build CL kernel. Load from cache if exists. Returns CL kernel."
@@ -159,16 +153,19 @@ class CLDev:
         gc_e.wait()
         return gc_c
 
-    def run(self, kernel, params, inputs, outputs, shape=None):
+    def run(self, kernel, params, inputs, outputs, input_shape=None, shape=None):
         "Run CL kernel on params. Multiple in, single out. CLImage buffers."
-        assert len(inputs) > 0 or len(outputs) > 0
+        assert len(outputs) > 0
         assert shape is not None
         assert type(shape[1]) == int
         assert type(shape[0]) == int
         assert shape[1] % 8 == 0, "Input image height must be divisible by 8"
         assert shape[0] % 8 == 0, "Input image width must be divisible by 8"
+        w, h = shape[0], shape[1]
+        if input_shape:
+            w, h = input_shape
         # width, height, params, inputs, outputs
-        run_evt = kernel(shape[0], shape[1], *params, *inputs, *outputs).on(
+        run_evt = kernel(w, h, *params, *inputs, *outputs).on(
             self.queue, offset=(0, 0), gsize=shape, lsize=(8, 8)
         )
         run_evt.wait()

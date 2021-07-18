@@ -104,23 +104,24 @@ def defish_cl(pix):
         write_imagef(output, loc, col);
     }}"""
 
-    k = cl_builder.build("defish", src, (cl.cl_int, cl.cl_int, cl.cl_image, cl.cl_image))
     img = cl_builder.new_image_from_ndarray(pix)
     out = cl_builder.new_image(img.width, img.height)
+    k = cl_builder.build("defish", src, (cl.cl_int, cl.cl_int, cl.cl_image, cl.cl_image))
     cl_builder.run(k, [], [img.data], [out.data], shape=(img.width, img.height))
     return out.to_numpy()
 
 
 def fish_to_equirect(pix):
-    src = """
+    src = f"""
     kernel void fish_to_equirect(
         const int width,
         const int height,
         __read_only image2d_t input,
         __write_only image2d_t output)
-    {
+    {{
         const int gx = get_global_id(0);
         const int gy = get_global_id(1);
+        const float2 gloc = (float2)(gx, gy);
         const sampler_t sampler = \
             CLK_NORMALIZED_COORDS_FALSE |
             CLK_ADDRESS_CLAMP |
@@ -129,30 +130,118 @@ def fish_to_equirect(pix):
         const float fwidth = (float)(width);
         const float fheight = (float)(height);
 
-        const float FOV = (M_PI * 100.0)/180.0;
+        const float up_angle = 30.0 * M_PI / 360.0;
 
-        float theta = ((float)(gx)/fwidth-0.5)*M_PI;
-        float phi = ((float)(gy)/fheight-0.5)*M_PI;
+        const float EWIDTH = 2048.0;
+        const float EHEIGHT = 1024.0;
 
-        float Px = cos(phi) * sin(theta);
-        float Py = cos(phi) * cos(theta);
-        float Pz = sin(phi);
+        const float map_x = (float)(gx*width)/EWIDTH;
+        const float map_y = (float)(gy*height)/EHEIGHT;
 
-        theta = atan2(Pz, Px);
-        phi = atan2(sqrt(pow(Px,2) + pow(Pz,2)), Py);
+        // Samyang 7.5mm f/3.5 = 99.1 Hfov
+        // -0.072 rad distort, -66.6 image hcenter shift, 40.0 vcenter shift
+        // ~30 pitch, -2 roll
+        const float FOV = M_PI * 99.1 / 180.0;
+
+        // Polar angles
+        float theta = 2.0 * M_PI * (map_x / fwidth - 0.5); // -pi to pi
+        float phi = M_PI * (map_y / fheight - 0.5); // -pi/2 to pi/2
+
+        // Vector in 3D space
+        float px = cos(phi) * sin(theta);
+        float py = cos(phi) * cos(theta);
+        float pz = sin(phi);
+
+        // Calculate fisheye angle and radius
+        theta = atan2(pz, px);
+        phi = atan2(sqrt(px*px + pz*pz), py);
         float r = fwidth * phi / FOV;
 
-        float dx = 0.5 * fwidth + r * cos(theta);
-        float dy = 0.5 * fheight + r * sin(theta);
+        // Pixel in fisheye space
+        const float offset_x = 0.0;
+        // const float offset_y = 0.0;
+        const float offset_y = up_angle;
 
+        float dx = (0.5 + offset_x) * fwidth + r * cos(theta);
+        float dy = (0.5 + offset_y) * fheight + r * sin(theta);
+
+        // Write out
         float4 col = read_imagef(input, sampler, (float2)(dx, dy));
         write_imagef(output, (int2)(gx, gy), col);
-    }"""
+    }}"""
 
     k = cl_builder.build("fish_to_equirect", src, (cl.cl_int, cl.cl_int, cl.cl_image, cl.cl_image))
     img = cl_builder.new_image_from_ndarray(pix)
-    out = cl_builder.new_image(img.width, img.height)
-    cl_builder.run(k, [], [img.data], [out.data], shape=(img.width, img.height))
+    out = cl_builder.new_image(2048, 1024)
+    cl_builder.run(k, [], [img.data], [out.data], input_shape=(img.width, img.height), shape=(2048, 1024))
+    return out.to_numpy()
+
+
+def stereographic_to_equirect(pix):
+    src = f"""
+    kernel void stereographic_to_equirect(
+        const int width,
+        const int height,
+        __read_only image2d_t input,
+        __write_only image2d_t output)
+    {{
+        const int gx = get_global_id(0);
+        const int gy = get_global_id(1);
+        const float2 gloc = (float2)(gx, gy);
+        const sampler_t sampler = \
+            CLK_NORMALIZED_COORDS_FALSE |
+            CLK_ADDRESS_CLAMP |
+            CLK_FILTER_LINEAR;
+
+        const float fwidth = (float)(width);
+        const float fheight = (float)(height);
+
+        // const float up_angle = 30.0 * M_PI / 360.0;
+
+        const float EWIDTH = 2048.0;
+        const float EHEIGHT = 1024.0;
+
+        const float map_x = (float)(gx*width)/EWIDTH;
+        const float map_y = (float)(gy*height)/EHEIGHT;
+
+        // Samyang 7.5mm f/3.5 = 99.1 Hfov calculated (ideal=100.4, 77.3)
+        // -0.072 rad distort, -66.6 image hcenter shift, 40.0 vcenter shift
+        // ~30 pitch, -2 roll
+        const float FOV = M_PI * 99.1 / 180.0;
+
+        // Polar angles for equidistant
+        float theta = 2.0 * M_PI * (map_x / fwidth - 0.5); // -pi to pi
+        float phi = M_PI * (map_y / fheight - 0.5); // -pi/2 to pi/2
+
+        // Vector in 3D space
+        float px = cos(phi) * sin(theta);
+        float py = cos(phi) * cos(theta);
+        float pz = sin(phi);
+
+        // Calculate fisheye angle and radius
+        theta = atan2(pz, px);
+        phi = atan2(sqrt(px*px + pz*pz), py);
+
+        // https://wiki.panotools.org/Fisheye_Projection
+        // float r = fwidth * phi / FOV;
+        float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
+
+        // Pixel in fisheye space
+        const float offset_x = 0.0;
+        const float offset_y = 0.0;
+
+        float dx = (0.5 + offset_x) * fwidth + r * cos(theta);
+        float dy = (0.5 + offset_y) * fheight + r * sin(theta);
+
+        // Write out
+        float4 col = read_imagef(input, sampler, (float2)(dx, dy));
+        write_imagef(output, (int2)(gx, gy), col);
+    }}"""
+
+    k = cl_builder.build("stereographic_to_equirect", src, (cl.cl_int, cl.cl_int, cl.cl_image, cl.cl_image))
+    img = cl_builder.new_image_from_ndarray(pix)
+    out = cl_builder.new_image(2048, 1024)
+    cl_builder.run(k, [], [img.data], [out.data], input_shape=(img.width, img.height), shape=(2048, 1024))
     return out.to_numpy()
 
 
@@ -173,9 +262,7 @@ def process_raw(path, show_exif=False, denoise=True, defish=True, plot_result=Fa
                 f'Orientation: {tags["Image Orientation"].values}, '
                 f'Software: {tags["Image Software"].values}'
             )
-            print(
-                f'Date: {tags["Image DateTime"].values}, Copyright: {tags["Image Copyright"].values}'
-            )
+            print(f'Date: {tags["Image DateTime"].values}, Copyright: {tags["Image Copyright"].values}')
             print()
             # for key, value in tags.items():
             #     # do not print (uninteresting) binary thumbnail data
@@ -209,10 +296,9 @@ def process_raw(path, show_exif=False, denoise=True, defish=True, plot_result=Fa
         no_auto_bright=True,
         use_camera_wb=True,
         output_bps=16,
-        fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode(2),
+        # fbdd_noise_reduction=rawpy.FBDDNoiseReductionMode(2),
         # dcb_iterations=4,
         # demosaic_algorithm=rawpy.DemosaicAlgorithm(4),
-        # half_size=True,
     )
     print(rgb.shape, rgb.dtype)
     height = rgb.shape[0]
@@ -248,7 +334,8 @@ def process_raw(path, show_exif=False, denoise=True, defish=True, plot_result=Fa
         print("Fisheye correction...")
         rgb4 = np.zeros((rgb.shape[0], rgb.shape[1], 4), dtype=rgb.dtype)
         rgb4[..., :3] = rgb
-        rgb = fish_to_equirect(rgb4)[..., :3]
+        rgb = stereographic_to_equirect(rgb4)[..., :3]
+        # rgb = defish_cl(rgb4)[..., :3]
 
     if save_as != "":
         # Save floating point data as EXR
@@ -263,7 +350,8 @@ def process_raw(path, show_exif=False, denoise=True, defish=True, plot_result=Fa
 
     if plot_result:
         # Show image with Matplotlib
-        plt.rcParams["figure.figsize"] = [width / 400, height / 400]
+        divider = rgb.shape[1] / 14
+        plt.rcParams["figure.figsize"] = [rgb.shape[1] / divider, rgb.shape[0] / divider]
         plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
         plt.margins(0, 0)
 

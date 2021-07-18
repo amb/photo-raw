@@ -1056,9 +1056,7 @@ def _wrapdll(*argtypes, **kw):
         except:
 
             def badfunc(*args, **kw):
-                raise NotImplementedError(
-                    "Function %s not present " "in this version of OpenCL" % f.__name__
-                )
+                raise NotImplementedError("Function %s not present " "in this version of OpenCL" % f.__name__)
 
             wrapped_func = badfunc
         wrapped_func.argtypes = argtypes
@@ -1396,8 +1394,7 @@ for name, val in cl_device_info._by_name.items():
                 propname,
                 property(
                     lambda self, val=val: clGetDeviceInfo(self, val),
-                    doc="Same as calling :func:`clGetDeviceInfo` "
-                    " with :const:`~cl_device_info.%s`" % name,
+                    doc="Same as calling :func:`clGetDeviceInfo` " " with :const:`~cl_device_info.%s`" % name,
                 ),
             )
 # cleanup
@@ -2155,9 +2152,7 @@ class cl_image(cl_mem):
             raise TypeError("Unknown memory type")
 
 
-@_wrapdll(
-    cl_context, cl_mem_flags, size_t, void_p, P(cl_errnum), res=cl_buffer, err=_lastarg_errcheck
-)
+@_wrapdll(cl_context, cl_mem_flags, size_t, void_p, P(cl_errnum), res=cl_buffer, err=_lastarg_errcheck)
 def clCreateBuffer(context, size, flags=cl_mem_flags.CL_MEM_READ_WRITE, host_ptr=None):
     """
     :param context: :class:`cl_context` that will own this memory.
@@ -2188,9 +2183,7 @@ def clReleaseMemObject(mem):
     clReleaseMemObject.call(mem)
 
 
-@_wrapdll(
-    cl_command_queue, cl_buffer, cl_bool, size_t, size_t, void_p, cl_uint, P(cl_event), P(cl_event)
-)
+@_wrapdll(cl_command_queue, cl_buffer, cl_bool, size_t, size_t, void_p, cl_uint, P(cl_event), P(cl_event))
 def clEnqueueReadBuffer(queue, mem, pointer, size=None, blocking=True, offset=0, wait_for=None):
     """
     Read from a :class:`cl_mem` buffer into host memory.
@@ -2234,9 +2227,7 @@ def clEnqueueReadBuffer(queue, mem, pointer, size=None, blocking=True, offset=0,
     return out_event
 
 
-@_wrapdll(
-    cl_command_queue, cl_buffer, cl_bool, size_t, size_t, void_p, cl_uint, P(cl_event), P(cl_event)
-)
+@_wrapdll(cl_command_queue, cl_buffer, cl_bool, size_t, size_t, void_p, cl_uint, P(cl_event), P(cl_event))
 def clEnqueueWriteBuffer(queue, mem, pointer, size=None, blocking=True, offset=0, wait_for=None):
     """
     Write to a :class:`cl_buffer` buffer from a location in host memory.
@@ -2347,9 +2338,7 @@ def clEnqueueWriteImage(
     P(cl_event),
     P(cl_event),
 )
-def clEnqueueCopyBuffer(
-    queue, src_buffer, dst_buffer, src_offset=0, dst_offset=0, size=None, wait_for=None
-):
+def clEnqueueCopyBuffer(queue, src_buffer, dst_buffer, src_offset=0, dst_offset=0, size=None, wait_for=None):
     if size is None:
         size = clGetMemObjectInfo(dst_buffer, cl_mem_info.CL_MEM_SIZE)
     nevents, wait_array = _make_event_array(wait_for)
@@ -2368,9 +2357,7 @@ def clEnqueueCopyBuffer(
     return out_event
 
 
-@_wrapdll(
-    cl_command_queue, cl_buffer, void_p, size_t, size_t, void_p, cl_uint, P(cl_event), P(cl_event)
-)
+@_wrapdll(cl_command_queue, cl_buffer, void_p, size_t, size_t, void_p, cl_uint, P(cl_event), P(cl_event))
 def clEnqueueFillBuffer(queue, mem, pattern, pattern_size=0, offset=0, size=0, wait_for=None):
     """
     Enqueues a command to fill a buffer object with a pattern of a given pattern size.
@@ -2786,15 +2773,10 @@ def clGetProgramBuildInfo(program, param_name, device=None):
     if device is None:
         device = program.devices
     if not isinstance(device, cl_device):
-        return [
-            clGetProgramBuildInfo(program, param_name, each_device)
-            for each_device in program.devices
-        ]
+        return [clGetProgramBuildInfo(program, param_name, each_device) for each_device in program.devices]
     if param_name == cl_program_build_info.CL_PROGRAM_BUILD_STATUS:
         param_value = cl_build_status()
-        clGetProgramBuildInfo.call(
-            program, device, param_name, sizeof(param_value), byref(param_value), None
-        )
+        clGetProgramBuildInfo.call(program, device, param_name, sizeof(param_value), byref(param_value), None)
         return param_value
     elif param_name in (
         cl_program_build_info.CL_PROGRAM_BUILD_OPTIONS,
@@ -2812,9 +2794,7 @@ def clGetProgramBuildInfo(program, param_name, device=None):
         raise ValueError("Unknown program build info %s" % param_name)
 
 
-@_wrapdll(
-    cl_context, cl_uint, P(char_p), P(size_t), P(cl_errnum), res=cl_program, err=_lastarg_errcheck
-)
+@_wrapdll(cl_context, cl_uint, P(char_p), P(size_t), P(cl_errnum), res=cl_program, err=_lastarg_errcheck)
 def clCreateProgramWithSource(context, source):
     """
     :param context: Context in which the program will exist
@@ -3103,9 +3083,7 @@ class cl_kernel(void_p):
         The maximum size of workgroups for this kernel on the
         specified device.
         """
-        return clGetKernelWorkGroupInfo(
-            self, cl_kernel_work_group_info.CL_KERNEL_WORK_GROUP_SIZE, device
-        )
+        return clGetKernelWorkGroupInfo(self, cl_kernel_work_group_info.CL_KERNEL_WORK_GROUP_SIZE, device)
 
     def compile_work_group_size(self, device=None):
         """
@@ -3121,9 +3099,7 @@ class cl_kernel(void_p):
         The amount of local memory that would be used by this kernel
         on the given device with its current argument set.
         """
-        return clGetKernelWorkGroupInfo(
-            self, cl_kernel_work_group_info.CL_KERNEL_LOCAL_MEM_SIZE, device
-        )
+        return clGetKernelWorkGroupInfo(self, cl_kernel_work_group_info.CL_KERNEL_LOCAL_MEM_SIZE, device)
 
     def preferred_work_group_size_multiple(self, device=None):
         """
@@ -3139,9 +3115,7 @@ class cl_kernel(void_p):
         """
         Amount of private memory needed to execute each workitem on the device.
         """
-        return clGetKernelWorkGroupInfo(
-            self, cl_kernel_work_group_info.CL_KERNEL_PRIVATE_MEM_SIZE, device
-        )
+        return clGetKernelWorkGroupInfo(self, cl_kernel_work_group_info.CL_KERNEL_PRIVATE_MEM_SIZE, device)
 
 
 @_wrapdll(cl_program, char_p, P(cl_errnum), res=cl_kernel, err=_lastarg_errcheck)
@@ -3402,9 +3376,7 @@ except ImportError:
 
 if HAVE_OPENGL:
 
-    @_wrapdll(
-        cl_context, cl_mem_flags, GL.GLuint, P(cl_errnum), res=cl_buffer, err=_lastarg_errcheck
-    )
+    @_wrapdll(cl_context, cl_mem_flags, GL.GLuint, P(cl_errnum), res=cl_buffer, err=_lastarg_errcheck)
     def clCreateFromGLBuffer(context, bufobj, flags=cl_mem_flags.CL_MEM_READ_WRITE):
         return clCreateFromGLBuffer.call(context, flags, bufobj, byref(cl_errnum()))
 
@@ -3553,8 +3525,7 @@ def _pycl_make_all():
     __all__ = [
         name
         for name in g
-        if not (name.startswith("_"))
-        and (hasattr(g[name], "__module__") and g[name].__module__ == __name__)
+        if not (name.startswith("_")) and (hasattr(g[name], "__module__") and g[name].__module__ == __name__)
     ]
     g["__all__"] = __all__
 
