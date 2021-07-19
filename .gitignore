@@ -4,3 +4,4 @@ test/
 .vscode/
 *.pyc
 __pycache__/
+exifread/
