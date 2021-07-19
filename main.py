@@ -304,20 +304,11 @@ def show_exif(path):
         #     f'Orientation: {tags["Image Orientation"].values}, '
         #     f'Software: {tags["Image Software"].values}'
         # )
-        # print(f'Date: {tags["Image DateTime"].values}, Copyright: {tags["Image Copyright"].values}')
+        # print(f'Date: {tags["Image DateTime"].values}, 
+        # Copyright: {tags["Image Copyright"].values}')
         for key, value in tags.items():
-            kl = key.lower()
-            if (
-                "roll" in kl
-                or "pitch" in kl
-                or "level" in kl
-                or "gauge" in kl
-                or "0x0100" in kl
-                or "0904" in kl
-                or "0903" in kl
-                or True
-            ):
-                print(f"{key}: {repr(value)}")
+            # kl = key.lower()
+            print(f"{key}: {repr(value)}")
             # do not print (uninteresting) binary thumbnail data
             # if "Image" in key or "GPS" in key: # or "EXIF" in key:
             #     print(f"{key}: {repr(value)}")
@@ -362,8 +353,9 @@ def process_raw(path, denoise=True):
 
     rgb = np.float32(rgb) / (2 ** 16 - 1)
 
-    # gamma compression
-    rgb = 2.0 * rgb ** 0.4
+    # gamma compression, exposure correction
+    exposure_steps = 2.0
+    rgb = (rgb * (2 ** exposure_steps)) ** 0.5
 
     rgb4 = np.empty((rgb.shape[0], rgb.shape[1], 4), dtype=rgb.dtype)
     rgb4[..., :3] = rgb
@@ -387,29 +379,50 @@ def process_raw(path, denoise=True):
     return rgb4, raw
 
 
+def get_tilt(filename):
+    import subprocess
+
+    out = subprocess.run(["exiftool", "-RollAngle", "-PitchAngle", filename], capture_output=True)
+    lines = out.stdout.decode("ASCII").split("\n")
+    if len(lines) != 3:
+        return None, None
+    lines = lines[:2]
+    roll_angle = float(lines[0].split(":")[-1])
+    pitch_angle = float(lines[1].split(":")[-1])
+
+    return roll_angle, pitch_angle
+
+# Approximate values, don't take it as a science
 # Sun: 100,000 lux
 # Daylight: 10000 lux
 # Overcast day/tv studio: 1000 lux
-# Office: 400
-# Livingroom: 50
-# Full moon: 0.2
+# Office: 400 lux
+# Livingroom: 50 lux
+# Full moon: 0.2 lux
 # Sun multiplier: 50x = ~5.7 steps
 
 # OM-D E-M10 II: 12.0 Ev dynamic range w/ 200 ISO
 # Load and convert raw camera input from a fisheye lens
+
 
 import glob
 
 image_arrays = []
 # raws = glob.glob("D:/photo/2021.7/pano2/*.orf")
 raws = glob.glob("D:/swap/downloads/*.orf")
-print("Total raws:", len(raws))
+print("Total raws in folder:", len(raws))
+
+print("Using Exiftool to extract camera tilt...")
+roll_angle, pitch_angle = get_tilt(raws[0])
+print("Roll angle:", roll_angle)
+print("Pitch angle:", pitch_angle)
+
 # image, raw = process_raw(raws[0], denoise=False)
+# plot_image_array(image)
+
 # show_raw_data(raw)
-i = 0
-print(raws[i])
 # show_exif(raws[i])
-print("EXIF read version:", exifread.__version__)
+
 
 if False:
     out = cl_builder.new_image(2048, 1024)
