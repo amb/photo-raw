@@ -205,7 +205,7 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         const float offset_x,
         const float offset_y,
         __read_only image2d_t input,
-        __write_only image2d_t output)
+        __read_write image2d_t output)
     {{
         const int gx = get_global_id(0);
         const int gy = get_global_id(1);
@@ -260,7 +260,7 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
 
         // Write out
         float4 col = read_imagef(input, sampler, (float2)(dx, dy));
-        
+
         // Set alpha to distance from origin
         float tr = 1.0 - 2.0 * r / fwidth;
         if (tr > 0.0) {{
@@ -272,7 +272,9 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         //    col.w = 0.0;
 
         if (dx > 0.0 && dy > 0.0 && dx < fwidth && dy < fheight) {{
-            write_imagef(output, (int2)(gx, gy), col);
+            float4 mcol = read_imagef(output, (int2)(gx, gy));
+            if (mcol.w < col.w)
+                write_imagef(output, (int2)(gx, gy), col);
         }}
     }}"""
 
@@ -463,34 +465,23 @@ print("Pitch angle:", pitch_angle)
 
 if True:
     out_cl = cl_builder.new_image(2048, 1024)
-    # x_locs = [0.0, 0.502]
-    # final = np.zeros((1024, 2048, 4), dtype=np.float32)
     for i, filename in enumerate(raws[:2]):
         print(f"Loading: {filename} ({os.path.basename(filename)})")
         image, raw_pixels = process_raw(filename, denoise=False)
         image_arrays.append(image)
-        # locs = np_image[..., 3] > final[..., 3]
-        # final[locs] = np_image[locs]
 
     print("Plotting final...")
-    # final[..., 3] = 1.0
-    # print(final.shape)
-    # plot_image_array(final)
 
     def new_image_data(width, height, params):
-        final = np.zeros((512, 1024, 4), dtype=np.float32)
+        # final = np.zeros((512, 1024, 4), dtype=np.float32)
         clear_cl(out_cl)
         for img_i, img in enumerate(image_arrays):
             stereographic_to_equirect(img, out_cl, params["x_locs"][img_i], -5.0)
-            np_image = out_cl.to_numpy()
-            locs = np_image[::2, ::2, :][..., 3] > final[..., 3]
-            final[locs] = np_image[::2, ::2, :][locs]
+        final = out_cl.to_numpy()[::2, ::2, :]
         final[..., 3] = 1.0
-        # r_image = np.swapaxes((final * 255.0).astype("uint8"), 0, 1)
-        r_image = (final * 255.0).astype("uint8")
-        return r_image
+        return (final * 255.0).astype("uint8")
 
     import gui
 
     gui.generate_image_data = new_image_data
-    gui.main()
+    gui.main([0.0, 0.5])

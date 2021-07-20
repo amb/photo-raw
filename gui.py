@@ -23,7 +23,8 @@ def generate_image_data(width, height, params):
 
 
 def get_pyglet_rgba_texture(width, height, params):
-    r_image = generate_image_data(width, height, params).flatten()
+    r_image = generate_image_data(width, height, params)
+    r_image.reshape((width * height * 4,))
     c_glu_p = ctypes.POINTER(gl.GLubyte)
     gr_image = r_image.ctypes.data_as(c_glu_p)
     tx = pyglet.image.ImageData(width, height, "RGBA", gr_image, pitch=width * 4 * 1).get_texture()
@@ -32,16 +33,19 @@ def get_pyglet_rgba_texture(width, height, params):
 
 # ----- Globals
 
-background_texture = get_pyglet_rgba_texture(1024, 512, {})
+background_texture = None
 any_changed = False
-position_sliders = [0.1, 0.2, 0.3, 0.4]
+position_sliders = None
 
 
-def main():
+def main(pos_sliders):
     window = pyglet.window.Window(width=1024, height=512, resizable=False)
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
     imgui.create_context()
     impl = create_renderer(window)
+
+    global position_sliders
+    position_sliders = pos_sliders
 
     def update(dt):
         global background_texture
@@ -108,7 +112,7 @@ def main():
             #     position_sliders[sld_i] = 0.0
 
             change, position_sliders[sld_i] = imgui.slider_float(
-                f"{sld_i}", position_sliders[sld_i], 0.0, 1.0
+                f"X{sld_i}", position_sliders[sld_i], 0.0, 1.0
             )
             if change:
                 print(position_sliders[sld_i])
@@ -122,6 +126,9 @@ def main():
         global background_texture
         global position_sliders
 
+        if any_changed or background_texture is None:
+            background_texture = get_pyglet_rgba_texture(1024, 512, {"x_locs": position_sliders})
+
         update(dt)
         window.clear()
 
@@ -129,13 +136,10 @@ def main():
 
         impl.render(imgui.get_draw_data())
 
-        if any_changed:
-            background_texture = get_pyglet_rgba_texture(1024, 512, {"x_locs": position_sliders})
-
     pyglet.clock.schedule_interval(draw, 1 / 60.0)
     pyglet.app.run()
     impl.shutdown()
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
