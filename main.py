@@ -205,13 +205,15 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         const float EWIDTH = 2048.0;
         const float EHEIGHT = 1024.0;
 
-        const float map_x = (float)(gx*width)/EWIDTH;
-        const float map_y = (float)(gy*height)/EHEIGHT;
+        const float map_x = (float)(gx)*fwidth/EWIDTH;
+        const float map_y = (float)(gy)*fheight/EHEIGHT;
 
         // Samyang 7.5mm f/3.5 on MFT, 2x crop = 99.1 Hfov calculated (ideal=100.4, 77.3)
         // -0.072 rad distort, -66.6 image hcenter shift, 40.0 vcenter shift
         // ~30 pitch, -2 roll
-        const float FOV = M_PI * 99.1 / 180.0;
+        // const float FOV = M_PI * 99.1 / 180.0;
+        // const float FOV = M_PI * 160.0 / 180.0;
+        const float FOV = M_PI * 215.0 / 180.0;
 
         // Calculate vector in equirectangular surface
         float theta = 2.0 * M_PI * (offset_x + map_x / fwidth - 0.5); // -PI .. PI
@@ -231,8 +233,8 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         phi = atan2(sqrt(px*px + pz*pz), py); // angle of vector to x-plane
 
         // https://en.wikipedia.org/wiki/Fisheye_lens#Mapping_function
-        // float r = fwidth * phi / FOV;
-        float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
+        float r = fwidth * phi / FOV;
+        // float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
 
         // Pixel in fisheye space
         float dx = (0.5) * fwidth + r * cos(theta);
@@ -240,6 +242,17 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
 
         // Write out
         float4 col = read_imagef(input, sampler, (float2)(dx, dy));
+        
+        // Set alpha to distance from origin
+        float tr = 1.0 - 2.0 * r / fwidth;
+        if (tr > 0.0) {{
+            col.w = sqrt(tr);
+        }} else {{
+            col.w = 0.0;
+        }}
+        //if (col.w < 0.0)
+        //    col.w = 0.0;
+
         if (dx > 0.0 && dy > 0.0 && dx < fwidth && dy < fheight) {{
             write_imagef(output, (int2)(gx, gy), col);
         }}
@@ -304,7 +317,7 @@ def show_exif(path):
         #     f'Orientation: {tags["Image Orientation"].values}, '
         #     f'Software: {tags["Image Software"].values}'
         # )
-        # print(f'Date: {tags["Image DateTime"].values}, 
+        # print(f'Date: {tags["Image DateTime"].values},
         # Copyright: {tags["Image Copyright"].values}')
         for key, value in tags.items():
             # kl = key.lower()
@@ -354,8 +367,13 @@ def process_raw(path, denoise=True):
     rgb = np.float32(rgb) / (2 ** 16 - 1)
 
     # gamma compression, exposure correction
-    exposure_steps = 2.0
-    rgb = (rgb * (2 ** exposure_steps)) ** 0.5
+    exposure_steps = 0.0
+    rgb *= 2 ** exposure_steps
+    rgb = oklab.linear_to_srgb(rgb, clamp=True)
+
+    # contrasty curves (I have no idea what i'm doing here, didn't look this up)
+    # rgb = np.abs(rgb * 2 - 1) ** 0.8 * np.sign(rgb * 2 - 1) * 0.5 + 0.5
+    # rgb = rgb * 0.5 + ((np.sin((rgb - 0.5) * np.pi) + 1.0) * 0.5) * 0.5
 
     rgb4 = np.empty((rgb.shape[0], rgb.shape[1], 4), dtype=rgb.dtype)
     rgb4[..., :3] = rgb
@@ -368,6 +386,7 @@ def process_raw(path, denoise=True):
         L = lab[..., 0]
         # lab = bilateral(lab, 64.0, 256.0)
         lab = bilateral(lab, 64.0, 128.0)
+        # Only chroma
         lab[..., 0] = L
         # lab = bilateral(lab, 16.0, 512.0)
         rgb4 = oklab.Lab_to_srgb(lab)
@@ -392,6 +411,7 @@ def get_tilt(filename):
 
     return roll_angle, pitch_angle
 
+
 # Approximate values, don't take it as a science
 # Sun: 100,000 lux
 # Daylight: 10000 lux
@@ -404,12 +424,15 @@ def get_tilt(filename):
 # OM-D E-M10 II: 12.0 Ev dynamic range w/ 200 ISO
 # Load and convert raw camera input from a fisheye lens
 
+# show_raw_data(raw)
+# show_exif(raws[i])
 
 import glob
 
 image_arrays = []
 # raws = glob.glob("D:/photo/2021.7/pano2/*.orf")
-raws = glob.glob("D:/swap/downloads/*.orf")
+# raws = glob.glob("D:/swap/downloads/*.orf")
+raws = glob.glob("raws2/*.orf")
 print("Total raws in folder:", len(raws))
 
 print("Using Exiftool to extract camera tilt...")
@@ -417,18 +440,22 @@ roll_angle, pitch_angle = get_tilt(raws[0])
 print("Roll angle:", roll_angle)
 print("Pitch angle:", pitch_angle)
 
-# image, raw = process_raw(raws[0], denoise=False)
-# plot_image_array(image)
 
-# show_raw_data(raw)
-# show_exif(raws[i])
-
+# image, raw = process_raw(raws[1], denoise=False)
 
 if False:
     out = cl_builder.new_image(2048, 1024)
-    for i, filename in enumerate(raws):
+    x_locs = [0.0, 0.502]
+    final = np.zeros((1024, 2048, 4), dtype=np.float32)
+    for i, filename in enumerate(raws[:2]):
         print(f"Loading: {filename} ({os.path.basename(filename)})")
-        image = process_raw(filename, denoise=False)
-        image = stereographic_to_equirect(image, out, i / len(raws), 0.0)
-        image_arrays.append(image)
-    plot_image_array(out.to_numpy())
+        image, raw_pixels = process_raw(filename, denoise=False)
+        stereographic_to_equirect(image, out, x_locs[i], -5.0)
+        # image_arrays.append(image)
+        np_image = out.to_numpy()
+        locs = np_image[..., 3] > final[..., 3]
+        final[locs] = np_image[locs]
+        # final = final + np_image
+    print("Plotting final...")
+    final[..., 3] = 1.0
+    plot_image_array(final)

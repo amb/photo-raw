@@ -1,8 +1,10 @@
 developed/
-raws/
+raws*/
 test/
 .vscode/
 *.pyc
 __pycache__/
 exifread/
 exiftool.exe
+imgui.ini
+
