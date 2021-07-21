@@ -129,81 +129,17 @@ def clear_cl(cl_img):
     cl_builder.run(k, [], [], [cl_img.data], shape=(cl_img.width, cl_img.height))
 
 
-def fish_to_equirect(pix):
-    src = f"""
-    kernel void fish_to_equirect(
-        const int width,
-        const int height,
-        __read_only image2d_t input,
-        __write_only image2d_t output)
-    {{
-        const int gx = get_global_id(0);
-        const int gy = get_global_id(1);
-        const float2 gloc = (float2)(gx, gy);
-        const sampler_t sampler = \
-            CLK_NORMALIZED_COORDS_FALSE |
-            CLK_ADDRESS_CLAMP |
-            CLK_FILTER_LINEAR;
-
-        const float fwidth = (float)(width);
-        const float fheight = (float)(height);
-
-        const float up_angle = 30.0 * M_PI / 360.0;
-
-        const float EWIDTH = 2048.0;
-        const float EHEIGHT = 1024.0;
-
-        const float map_x = (float)(gx*width)/EWIDTH;
-        const float map_y = (float)(gy*height)/EHEIGHT;
-
-        // Samyang 7.5mm f/3.5 = 99.1 Hfov
-        // -0.072 rad distort, -66.6 image hcenter shift, 40.0 vcenter shift
-        // ~30 pitch, -2 roll
-        const float FOV = M_PI * 99.1 / 180.0;
-
-        // Polar angles
-        float theta = 2.0 * M_PI * (map_x / fwidth - 0.5); // -pi to pi
-        float phi = M_PI * (map_y / fheight - 0.5); // -pi/2 to pi/2
-
-        // Vector in 3D space
-        float px = cos(phi) * sin(theta);
-        float py = cos(phi) * cos(theta);
-        float pz = sin(phi);
-
-        // Calculate fisheye angle and radius
-        theta = atan2(pz, px);
-        phi = atan2(sqrt(px*px + pz*pz), py);
-        float r = fwidth * phi / FOV;
-
-        // Pixel in fisheye space
-        const float offset_x = 0.0;
-        // const float offset_y = 0.0;
-        const float offset_y = up_angle;
-
-        float dx = (0.5 + offset_x) * fwidth + r * cos(theta);
-        float dy = (0.5 + offset_y) * fheight + r * sin(theta);
-
-        // Write out
-        float4 col = read_imagef(input, sampler, (float2)(dx, dy));
-        write_imagef(output, (int2)(gx, gy), col);
-    }}"""
-
-    k = cl_builder.build("fish_to_equirect", src, (cl.cl_int, cl.cl_int, cl.cl_image, cl.cl_image))
-    img = cl_builder.new_image_from_ndarray(pix)
-    out = cl_builder.new_image(2048, 1024)
-    cl_builder.run(
-        k, [], [img.data], [out.data], input_shape=(img.width, img.height), shape=(2048, 1024)
-    )
-    return out.to_numpy()
-
-
-def stereographic_to_equirect(pix, out, offset_x, offset_y):
+def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, rot, fov):
     src = f"""
     kernel void stereographic_to_equirect(
         const int width,
         const int height,
         const float offset_x,
         const float offset_y,
+        const float optic_x,
+        const float optic_y,
+        const float rot,
+        const float m_fov,
         __read_only image2d_t input,
         __read_write image2d_t output)
     {{
@@ -218,8 +154,6 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         const float fwidth = (float)(width);
         const float fheight = (float)(height);
 
-        const float up_angle = offset_y * M_PI / 180.0;
-
         const float EWIDTH = 2048.0;
         const float EHEIGHT = 1024.0;
 
@@ -229,9 +163,7 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         // Samyang 7.5mm f/3.5 on MFT, 2x crop = 99.1 Hfov calculated (ideal=100.4, 77.3)
         // -0.072 rad distort, -66.6 image hcenter shift, 40.0 vcenter shift
         // ~30 pitch, -2 roll
-        // const float FOV = M_PI * 99.1 / 180.0;
-        // const float FOV = M_PI * 160.0 / 180.0;
-        const float FOV = M_PI * 215.0 / 180.0;
+        const float FOV = M_PI * m_fov / 180.0;
 
         // Calculate vector in equirectangular surface
         float theta = 2.0 * M_PI * (offset_x + map_x / fwidth - 0.5); // -PI .. PI
@@ -240,9 +172,60 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         float py = cos(phi) * cos(theta);
         float pz = sin(phi);
 
-        // Rotate around x-axis
-        float pyn = py * cos(up_angle) - pz * sin(up_angle);
-        float pzn = py * sin(up_angle) + pz * cos(up_angle);
+        // Rotate around z and y axis
+
+        /*
+            Formulation from basic rotation matrices:
+
+            x
+            ---
+            1	    0	    0
+            0	    cosy	-siny
+            0	    siny	cosy
+
+            y
+            ---
+            cosb	0	    sinb
+            0	    1	    0
+            -sinb	0	    cosb
+
+            z
+            ---
+            cosy    -siny   0
+            siny    cosy    0
+            0       0       1
+
+            res (yx)
+            ---
+            cosb		siny*sinb	sinb*cosy
+            0		    cosy		-siny
+            -sinb		siny*cosb	cosb*cosy
+
+            res (zy)
+            ---
+            cosb*cosy   -siny       cosy*sinb
+            cosb*siny   cosy        sinb*siny
+            -sinb       0           cosb
+
+            res (yz)
+            ---
+            cosy        -siny*cosb  sinb
+            cosy*cosb   cosy        0
+            -sinb*cosy  siny*sinb   cosb
+        */
+
+        const float ab = offset_y * M_PI;
+
+        const float cosb = cos(ab);
+        const float sinb = sin(ab);
+        // const float cosy = cos(ay);
+        // const float siny = sin(ay);
+
+        float pxn = px;
+        float pyn = py*cosb-pz*sinb;
+        float pzn = py*sinb+pz*cosb;
+
+        px = pxn;
         py = pyn;
         pz = pzn;
 
@@ -255,8 +238,8 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
         // float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
 
         // Pixel in fisheye space
-        float dx = (0.5) * fwidth + r * cos(theta);
-        float dy = (0.5) * fheight + r * sin(theta);
+        float dx = (0.5 + optic_x) * fwidth + r * cos(theta + rot * M_PI);
+        float dy = (0.5 + optic_y) * fheight + r * sin(theta + rot * M_PI);
 
         // Write out
         float4 col = read_imagef(input, sampler, (float2)(dx, dy));
@@ -281,16 +264,27 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y):
     k = cl_builder.build(
         "stereographic_to_equirect",
         src,
-        (cl.cl_int, cl.cl_int, cl.cl_float, cl.cl_float, cl.cl_image, cl.cl_image),
+        (
+            cl.cl_int,
+            cl.cl_int,
+            cl.cl_float,
+            cl.cl_float,
+            cl.cl_float,
+            cl.cl_float,
+            cl.cl_float,
+            cl.cl_float,
+            cl.cl_image,
+            cl.cl_image,
+        ),
     )
     img = cl_builder.new_image_from_ndarray(pix)
     cl_builder.run(
         k,
-        [offset_x, offset_y],
+        [offset_x, offset_y, optic_x, optic_y, rot, fov],
         [img.data],
         [out.data],
         input_shape=(img.width, img.height),
-        shape=(2048, 1024),
+        shape=(out.width, out.height),
     )
     # return out.to_numpy()
 
@@ -476,7 +470,16 @@ if True:
         # final = np.zeros((512, 1024, 4), dtype=np.float32)
         clear_cl(out_cl)
         for img_i, img in enumerate(image_arrays):
-            stereographic_to_equirect(img, out_cl, params["x_locs"][img_i], -5.0)
+            stereographic_to_equirect(
+                img,
+                out_cl,
+                params["x_locs"][img_i],
+                params["y_locs"][img_i],
+                params["x_optic"][img_i],
+                params["y_optic"][img_i],
+                params["rot"][img_i],
+                params["fov"],
+            )
         final = out_cl.to_numpy()[::2, ::2, :]
         final[..., 3] = 1.0
         return (final * 255.0).astype("uint8")
@@ -484,4 +487,4 @@ if True:
     import gui
 
     gui.generate_image_data = new_image_data
-    gui.main([0.0, 0.5])
+    gui.main([0.0, 0.5], [0.0, 0.0], [0.0, 0.0])
