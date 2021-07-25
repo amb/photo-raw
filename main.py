@@ -129,23 +129,68 @@ def clear_cl(cl_img):
     cl_builder.run(k, [], [], [cl_img.data], shape=(cl_img.width, cl_img.height))
 
 
+def create_rot_matrix(x, y, rot):
+
+    m_y = y * np.pi
+    m_x = x * np.pi * 2.0
+    m_r = rot * np.pi
+
+    # TODO: y=depth? why?
+    # x=right, z=up
+
+    cosb, sinb = np.cos(m_r), np.sin(m_r)
+    cosy, siny = np.cos(m_y), np.sin(m_y)
+    cosa, sina = np.cos(m_x), np.sin(m_x)
+
+    # around z-axis (x-angle)
+    i_rza = np.array(
+        [
+            [cosa, -sina, 0.0],
+            [sina, cosa, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+
+    # around y-axis (roll)
+    i_rya = np.array(
+        [
+            [cosb, 0.0, sinb],
+            [0.0, 1.0, 0.0],
+            [-sinb, 0.0, cosb],
+        ],
+        dtype=np.float32,
+    )
+
+    # around x-axis (y-angle)
+    i_rxa = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, cosy, -siny],
+            [0.0, siny, cosy],
+        ],
+        dtype=np.float32,
+    )
+
+    return i_rxa @ i_rya @ i_rza
+
+
 def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, rot, fov):
     src = f"""
     kernel void stereographic_to_equirect(
         const int width,
         const int height,
-        const float offset_x,
-        const float offset_y,
         const float optic_x,
         const float optic_y,
-        const float rot,
         const float m_fov,
+        const __global float* i_mtx,
         __read_only image2d_t input,
         __read_write image2d_t output)
     {{
         const int gx = get_global_id(0);
         const int gy = get_global_id(1);
         const float2 gloc = (float2)(gx, gy);
+        const int2 iloc = (int2)(gx, gy);
         const sampler_t sampler = \
             CLK_NORMALIZED_COORDS_FALSE |
             CLK_ADDRESS_CLAMP |
@@ -160,70 +205,19 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, ro
         const float map_x = (float)(gx)*fwidth/EWIDTH;
         const float map_y = (float)(gy)*fheight/EHEIGHT;
 
-        // Samyang 7.5mm f/3.5 on MFT, 2x crop = 99.1 Hfov calculated (ideal=100.4, 77.3)
-        // -0.072 rad distort, -66.6 image hcenter shift, 40.0 vcenter shift
-        // ~30 pitch, -2 roll
         const float FOV = M_PI * m_fov / 180.0;
 
         // Calculate vector in equirectangular surface
-        float theta = 2.0 * M_PI * (offset_x + map_x / fwidth - 0.5); // -PI .. PI
+        float theta = 2.0 * M_PI * (map_x / fwidth - 0.5); // -PI .. PI
         float phi = M_PI * (map_y / fheight - 0.5); // -PI/2 .. PI/2
         float px = cos(phi) * sin(theta);
         float py = cos(phi) * cos(theta);
         float pz = sin(phi);
 
-        // Rotate around z and y axis
-
-        /*
-            Formulation from basic rotation matrices:
-
-            x
-            ---
-            1	    0	    0
-            0	    cosy	-siny
-            0	    siny	cosy
-
-            y
-            ---
-            cosb	0	    sinb
-            0	    1	    0
-            -sinb	0	    cosb
-
-            z
-            ---
-            cosy    -siny   0
-            siny    cosy    0
-            0       0       1
-
-            res (yx)
-            ---
-            cosb		siny*sinb	sinb*cosy
-            0		    cosy		-siny
-            -sinb		siny*cosb	cosb*cosy
-
-            res (zy)
-            ---
-            cosb*cosy   -siny       cosy*sinb
-            cosb*siny   cosy        sinb*siny
-            -sinb       0           cosb
-
-            res (yz)
-            ---
-            cosy        -siny*cosb  sinb
-            cosy*cosb   cosy        0
-            -sinb*cosy  siny*sinb   cosb
-        */
-
-        const float ab = offset_y * M_PI;
-
-        const float cosb = cos(ab);
-        const float sinb = sin(ab);
-        // const float cosy = cos(ay);
-        // const float siny = sin(ay);
-
-        float pxn = px;
-        float pyn = py*cosb-pz*sinb;
-        float pzn = py*sinb+pz*cosb;
+        // Apply matrix to transform view vectors
+        float pxn = px * i_mtx[0] + py * i_mtx[1] + pz * i_mtx[2];
+        float pyn = px * i_mtx[3] + py * i_mtx[4] + pz * i_mtx[5];
+        float pzn = px * i_mtx[6] + py * i_mtx[7] + pz * i_mtx[8];
 
         px = pxn;
         py = pyn;
@@ -234,31 +228,38 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, ro
         phi = atan2(sqrt(px*px + pz*pz), py); // angle of vector to x-plane
 
         // https://en.wikipedia.org/wiki/Fisheye_lens#Mapping_function
-        float r = fwidth * phi / FOV;
-        // float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
+        // float r = fwidth * phi / FOV;
+        float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
 
         // Pixel in fisheye space
-        float dx = (0.5 + optic_x) * fwidth + r * cos(theta + rot * M_PI);
-        float dy = (0.5 + optic_y) * fheight + r * sin(theta + rot * M_PI);
+        float dx = (0.5 + optic_x) * fwidth + r * cos(theta);
+        float dy = (0.5 + optic_y) * fheight + r * sin(theta);
 
         // Write out
-        float4 col = read_imagef(input, sampler, (float2)(dx, dy));
-
-        // Set alpha to distance from origin
-        float tr = 1.0 - 2.0 * r / fwidth;
-        if (tr > 0.0) {{
-            col.w = sqrt(tr);
-        }} else {{
-            col.w = 0.0;
-        }}
-        //if (col.w < 0.0)
-        //    col.w = 0.0;
-
+        float4 col;
         if (dx > 0.0 && dy > 0.0 && dx < fwidth && dy < fheight) {{
-            float4 mcol = read_imagef(output, (int2)(gx, gy));
-            if (mcol.w < col.w)
-                write_imagef(output, (int2)(gx, gy), col);
+            col = read_imagef(input, sampler, (float2)(dx, dy));
+
+            // TODO: should probably be r/(len(width, height))
+            float tr = 1.0 - r / fwidth;
+
+            // Set alpha to distance from origin
+            if (tr > 0.0) {{
+                // Vignetting correction for Samyang 7.5mm
+                float vg = 1.0;
+                vg += -0.2271550 *pow(tr, 2);
+                vg += -0.1040244 *pow(tr, 3);
+                vg +=  0.0864606 *pow(tr, 4);
+                vg += -0.3646185 *pow(tr, 5);
+                vg +=  0.1749058 *pow(tr, 6);
+                col *= 1.0f/vg;
+                col.w = sqrt(tr);
+            }}
+
+            if (col.w > read_imagef(output, iloc).w)
+                write_imagef(output, iloc, col);
         }}
+
     }}"""
 
     k = cl_builder.build(
@@ -270,17 +271,18 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, ro
             cl.cl_float,
             cl.cl_float,
             cl.cl_float,
-            cl.cl_float,
-            cl.cl_float,
-            cl.cl_float,
+            cl.cl_mem,
             cl.cl_image,
             cl.cl_image,
         ),
     )
     img = cl_builder.new_image_from_ndarray(pix)
+    # print(img.width, img.height)
+    # print(out.width, out.height)
+    cl_mtx = cl_builder.to_buffer(create_rot_matrix(offset_x, offset_y, rot).flatten())
     cl_builder.run(
         k,
-        [offset_x, offset_y, optic_x, optic_y, rot, fov],
+        [optic_x, optic_y, fov, cl_mtx],
         [img.data],
         [out.data],
         input_shape=(img.width, img.height),
@@ -365,8 +367,6 @@ def show_raw_data(raw):
 
 def process_raw(path, denoise=True):
     raw = rawpy.imread(path)
-
-    print("RAW postprocess...")
     rgb = raw.postprocess(
         gamma=(1, 1),
         # exp_shift=3,
@@ -413,6 +413,7 @@ def process_raw(path, denoise=True):
 
 
 def get_tilt(filename):
+    """use the great exiftool.exe to parse out roll and pitch angle"""
     import subprocess
 
     out = subprocess.run(["exiftool", "-RollAngle", "-PitchAngle", filename], capture_output=True)
@@ -444,25 +445,30 @@ def get_tilt(filename):
 import glob
 
 image_arrays = []
+rotations = []
 # raws = glob.glob("D:/photo/2021.7/pano2/*.orf")
 # raws = glob.glob("D:/swap/downloads/*.orf")
-raws = glob.glob("raws2/*.orf")
+# raws = glob.glob("test/P7240158.orf")
+raws = glob.glob("raws4/*.orf")
+raws = raws[:4]
+# raws = raws[:1] + raws[-1:]
+# raws = [raws[0]]
 print("Total raws in folder:", len(raws))
-
-print("Using Exiftool to extract camera tilt...")
-roll_angle, pitch_angle = get_tilt(raws[0])
-print("Roll angle:", roll_angle)
-print("Pitch angle:", pitch_angle)
-
 
 # image, raw = process_raw(raws[1], denoise=False)
 
+
 if True:
     out_cl = cl_builder.new_image(2048, 1024)
-    for i, filename in enumerate(raws[:2]):
+    for i, filename in enumerate(raws):
         print(f"Loading: {filename} ({os.path.basename(filename)})")
-        image, raw_pixels = process_raw(filename, denoise=False)
-        image_arrays.append(image)
+        roll_angle, pitch_angle = get_tilt(filename)
+        if roll_angle and pitch_angle:
+            # Only add images with angles
+            print(f"Roll: {roll_angle}, Pitch: {pitch_angle}")
+            image, raw_pixels = process_raw(filename, denoise=False)
+            image_arrays.append(image)
+            rotations.append((roll_angle, pitch_angle))
 
     print("Plotting final...")
 
@@ -481,10 +487,30 @@ if True:
                 params["fov"],
             )
         final = out_cl.to_numpy()[::2, ::2, :]
+        # normalize
+        final -= np.min(final)
+        final /= np.max(final)
         final[..., 3] = 1.0
         return (final * 255.0).astype("uint8")
 
     import gui
 
+    # samyang fisheye (theorethical): 7.5mm
+    # -0.072 rad distort, -66.6 image hcenter shift, 40.0 vcenter shift
+    # fisheye factor: -0.488398
+    # shift: long=-0.023%, short=0.23%
+    # distortion (a, b, c): -0.045, 0.14, -0.11
+    # m4/3: (18mm w, 13.5mm h, 22.5mm d) imaging area: (17.3mm w, 13.0mm h, 21.6mm d) crop: 2.0
+    focal_distance = 7.5
+    sensor_diagonal = 21.6
+    sensor_horizontal = 17.3
+
     gui.generate_image_data = new_image_data
-    gui.main([0.0, 0.5], [0.0, 0.0], [0.0, 0.0])
+    gui.main(
+        [i / len(image_arrays) for i in range(len(image_arrays))],
+        # v[0]=roll, v[1]=pitch
+        [v[1] / 180 for v in rotations],
+        [v[0] / 180 for v in rotations],
+        np.arctan(sensor_horizontal / 2 / focal_distance) * 180.0 / np.pi * 2.0,
+        # 144.0,
+    )

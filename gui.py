@@ -1,19 +1,12 @@
-# -*- coding: utf-8 -*-
 from __future__ import absolute_import
 
-import pyglet
-from pyglet import gl
+import ctypes
 
 import imgui
-
-# Note that we could explicitly choose to use PygletFixedPipelineRenderer
-# or PygletProgrammablePipelineRenderer, but create_renderer handles the
-# version checking for us.
-from imgui.integrations.pyglet import create_renderer
-
-
 import numpy as np
-import ctypes
+import pyglet
+from imgui.integrations.pyglet import create_renderer
+from pyglet import gl
 
 
 def generate_image_data(width, height, params):
@@ -40,10 +33,10 @@ y_loc_sliders = None
 x_optics = None
 y_optics = None
 r_loc_sliders = None
-p_fov = 180.0
+p_fov = 140.0
 
 
-def main(x_pos_sliders, y_pos_sliders, r_pos_sliders):
+def main(x_pos_sliders, y_pos_sliders, r_pos_sliders, pm_fov):
     window = pyglet.window.Window(width=1024, height=512, resizable=False)
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
     imgui.create_context()
@@ -54,11 +47,13 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders):
     global x_optics
     global y_optics
     global r_loc_sliders
+    global p_fov
     x_loc_sliders = x_pos_sliders
     y_loc_sliders = y_pos_sliders
     r_loc_sliders = r_pos_sliders
     x_optics = [0] * len(x_loc_sliders)
     y_optics = [0] * len(x_loc_sliders)
+    p_fov = pm_fov
 
     def update(dt):
         global background_texture
@@ -105,8 +100,9 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders):
             False,
             flags=imgui.WINDOW_NO_COLLAPSE
             | imgui.WINDOW_NO_RESIZE
-            | imgui.WINDOW_ALWAYS_AUTO_RESIZE
-            | imgui.WINDOW_NO_TITLE_BAR,
+            # | imgui.WINDOW_ALWAYS_AUTO_RESIZE
+            | imgui.WINDOW_NO_TITLE_BAR
+            | imgui.WINDOW_HORIZONTAL_SCROLLING_BAR
         )
         # imgui.text("Bar")
         # imgui.same_line()
@@ -124,10 +120,10 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders):
                 f"Y{sld_i}", y_loc_sliders[sld_i], -0.5, 0.5
             )
             any_changed |= change
-            change, x_optics[sld_i] = imgui.slider_float(f"Xo{sld_i}", x_optics[sld_i], -0.5, 0.5)
-            any_changed |= change
-            change, y_optics[sld_i] = imgui.slider_float(f"Yo{sld_i}", y_optics[sld_i], -0.5, 0.5)
-            any_changed |= change
+            # change, x_optics[sld_i] = imgui.slider_float(f"Xo{sld_i}", x_optics[sld_i], -0.5, 0.5)
+            # any_changed |= change
+            # change, y_optics[sld_i] = imgui.slider_float(f"Yo{sld_i}", y_optics[sld_i], -0.5, 0.5)
+            # any_changed |= change
             change, r_loc_sliders[sld_i] = imgui.slider_float(
                 f"R{sld_i}", r_loc_sliders[sld_i], -0.5, 0.5
             )
@@ -173,6 +169,3 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders):
     pyglet.app.run()
     impl.shutdown()
 
-
-# if __name__ == "__main__":
-#     main()
