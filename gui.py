@@ -20,6 +20,8 @@ def get_pyglet_rgba_texture(width, height, params):
     r_image.reshape((width * height * 4,))
     c_glu_p = ctypes.POINTER(gl.GLubyte)
     gr_image = r_image.ctypes.data_as(c_glu_p)
+    # TODO: pyglet.image.ImageData.set_data(self, format, pitch, data)
+    # https://pythonhosted.org/pyglet/api/pyglet.image.ImageData-class.html
     tx = pyglet.image.ImageData(width, height, "RGBA", gr_image, pitch=width * 4 * 1).get_texture()
     return tx
 

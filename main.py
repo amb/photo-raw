@@ -1,16 +1,20 @@
+import glob
 import os
+
 import cv2
-import exifread
 import matplotlib.pyplot as plt
 import numpy as np
 import rawpy
 from OpenImageIO import ImageOutput, ImageSpec
+from PIL import Image
 
-print(rawpy.flags)
-# from scipy import interpolate, ndimage
-
+import exifread
 from image_cl import CLDev, oklab
 from image_cl import pycl as cl
+
+# print(rawpy.flags)
+# from scipy import interpolate, ndimage
+
 
 # Init cl_builder using CL device 0
 cl_builder = CLDev(0)
@@ -228,8 +232,8 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, ro
         phi = atan2(sqrt(px*px + pz*pz), py); // angle of vector to x-plane
 
         // https://en.wikipedia.org/wiki/Fisheye_lens#Mapping_function
-        // float r = fwidth * phi / FOV;
-        float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
+        float r = fwidth * phi / FOV;
+        // float r = 2.0 * fwidth * tan(phi * 0.5 / FOV);
 
         // Pixel in fisheye space
         float dx = (0.5 + optic_x) * fwidth + r * cos(theta);
@@ -239,23 +243,31 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, ro
         float4 col;
         if (dx > 0.0 && dy > 0.0 && dx < fwidth && dy < fheight) {{
             col = read_imagef(input, sampler, (float2)(dx, dy));
-
-            // TODO: should probably be r/(len(width, height))
             float tr = 1.0 - r / fwidth;
 
             // Set alpha to distance from origin
             if (tr > 0.0) {{
                 // Vignetting correction for Samyang 7.5mm
+                // It's a polynomial
                 float vg = 1.0;
-                vg += -0.2271550 *pow(tr, 2);
-                vg += -0.1040244 *pow(tr, 3);
-                vg +=  0.0864606 *pow(tr, 4);
-                vg += -0.3646185 *pow(tr, 5);
-                vg +=  0.1749058 *pow(tr, 6);
+                float ttr = tr * tr;
+                vg += -0.2271550 * ttr;
+                ttr *= tr;
+                vg += -0.1040244 * ttr;
+                ttr *= tr;
+                vg +=  0.0864606 * ttr;
+                ttr *= tr;
+                vg += -0.3646185 * ttr;
+                ttr *= tr;
+                vg +=  0.1749058 * ttr;
                 col *= 1.0f/vg;
                 col.w = sqrt(tr);
             }}
 
+            // Clip color values to 0.0 - 0.1
+            col = clamp(col, 0.0f, 1.0f);
+
+            // Only overwrite lesser alpha
             if (col.w > read_imagef(output, iloc).w)
                 write_imagef(output, iloc, col);
         }}
@@ -442,38 +454,19 @@ def get_tilt(filename):
 # show_raw_data(raw)
 # show_exif(raws[i])
 
-import glob
 
-image_arrays = []
-rotations = []
 # raws = glob.glob("D:/photo/2021.7/pano2/*.orf")
 # raws = glob.glob("D:/swap/downloads/*.orf")
 # raws = glob.glob("test/P7240158.orf")
-raws = glob.glob("raws4/*.orf")
-raws = raws[:4]
-# raws = raws[:1] + raws[-1:]
-# raws = [raws[0]]
-print("Total raws in folder:", len(raws))
-
-# image, raw = process_raw(raws[1], denoise=False)
+# raws = glob.glob("raws4/*.orf")
+# raws = raws[:1]
+# print("Total raws in folder:", len(raws))
 
 
-if True:
+def build_panorama(image_arrays, rotations):
     out_cl = cl_builder.new_image(2048, 1024)
-    for i, filename in enumerate(raws):
-        print(f"Loading: {filename} ({os.path.basename(filename)})")
-        roll_angle, pitch_angle = get_tilt(filename)
-        if roll_angle and pitch_angle:
-            # Only add images with angles
-            print(f"Roll: {roll_angle}, Pitch: {pitch_angle}")
-            image, raw_pixels = process_raw(filename, denoise=False)
-            image_arrays.append(image)
-            rotations.append((roll_angle, pitch_angle))
-
-    print("Plotting final...")
 
     def new_image_data(width, height, params):
-        # final = np.zeros((512, 1024, 4), dtype=np.float32)
         clear_cl(out_cl)
         for img_i, img in enumerate(image_arrays):
             stereographic_to_equirect(
@@ -487,9 +480,6 @@ if True:
                 params["fov"],
             )
         final = out_cl.to_numpy()[::2, ::2, :]
-        # normalize
-        final -= np.min(final)
-        final /= np.max(final)
         final[..., 3] = 1.0
         return (final * 255.0).astype("uint8")
 
@@ -502,8 +492,8 @@ if True:
     # distortion (a, b, c): -0.045, 0.14, -0.11
     # m4/3: (18mm w, 13.5mm h, 22.5mm d) imaging area: (17.3mm w, 13.0mm h, 21.6mm d) crop: 2.0
     focal_distance = 7.5
-    sensor_diagonal = 21.6
     sensor_horizontal = 17.3
+    # sensor_diagonal = 21.6
 
     gui.generate_image_data = new_image_data
     gui.main(
@@ -512,5 +502,32 @@ if True:
         [v[1] / 180 for v in rotations],
         [v[0] / 180 for v in rotations],
         np.arctan(sensor_horizontal / 2 / focal_distance) * 180.0 / np.pi * 2.0,
-        # 144.0,
     )
+
+
+def load_raw_image_arrays(raw_filenames):
+    image_arrays = []
+    rotations = []
+
+    for i, filename in enumerate(raw_filenames):
+        print(f"Loading: {filename} ({os.path.basename(filename)})")
+        roll_angle, pitch_angle = get_tilt(filename)
+        if roll_angle and pitch_angle:
+            # Only add images with angles
+            print(f"Roll: {roll_angle}, Pitch: {pitch_angle}")
+            image, raw_pixels = process_raw(filename, denoise=False)
+            image_arrays.append(image)
+            rotations.append((roll_angle, pitch_angle))
+    return image_arrays, rotations
+
+
+def load_jpeg_image_array(jpeg_file):
+    with Image.open(jpeg_file) as im:
+        pix = np.array(im)
+    new_pix = np.empty((pix.shape[0], pix.shape[1], 4), dtype=np.float32)
+    new_pix[..., :3] = pix / 255.0
+    new_pix[..., 3] = 1.0
+    return new_pix
+
+
+build_panorama([load_jpeg_image_array("test/dxo.jpg")], [(0.0, 0.0)])
