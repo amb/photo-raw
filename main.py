@@ -239,30 +239,33 @@ def stereographic_to_equirect(pix, out, offset_x, offset_y, optic_x, optic_y, ro
         float dx = (0.5 + optic_x) * fwidth + r * cos(theta);
         float dy = (0.5 + optic_y) * fheight + r * sin(theta);
 
-        // Write out
-        float4 col;
-        if (dx > 0.0 && dy > 0.0 && dx < fwidth && dy < fheight) {{
-            col = read_imagef(input, sampler, (float2)(dx, dy));
-            float tr = 1.0 - r / fwidth;
+        // Filter out image limits and the far edge of the fisheye
+        if (dx > 0.0 && dy > 0.0 && dx < fwidth && dy < fheight && r < fheight * 0.5) {{
+            float4 col = read_imagef(input, sampler, (float2)(dx, dy));
 
             // Set alpha to distance from origin
-            if (tr > 0.0) {{
-                // Vignetting correction for Samyang 7.5mm
-                // It's a polynomial
-                float vg = 1.0;
-                float ttr = tr * tr;
-                vg += -0.2271550 * ttr;
-                ttr *= tr;
-                vg += -0.1040244 * ttr;
-                ttr *= tr;
-                vg +=  0.0864606 * ttr;
-                ttr *= tr;
-                vg += -0.3646185 * ttr;
-                ttr *= tr;
-                vg +=  0.1749058 * ttr;
-                col *= 1.0f/vg;
-                col.w = sqrt(tr);
-            }}
+            float tr = r / fheight;
+
+            // Vignetting correction
+            // Samyang 7.5mm: -0.227155, -0.1040244, 0.0864606, -0.3646185, 0.1749058
+            // Laowa 4mm, 266 fov: -0.922568321 -0.69231236 -0.40097493 -0.2004689 -0.093277849
+
+            // It's a polynomial
+            float vg = 1.0;
+            float ttr = tr * tr;
+            vg += -0.922568321 * ttr;
+            ttr *= tr;
+            vg += -0.69231236 * ttr;
+            ttr *= tr;
+            vg += -0.40097493 * ttr;
+            ttr *= tr;
+            vg += -0.2004689 * ttr;
+            ttr *= tr;
+            vg += -0.093277849 * ttr;
+            col *= 1.0f/vg;
+
+            // Image alpha = distance from image center
+            col.w = 1.0f - tr;
 
             // Clip color values to 0.0 - 0.1
             col = clamp(col, 0.0f, 1.0f);
@@ -393,6 +396,7 @@ def process_raw(path, denoise=True):
     rgb = np.float32(rgb) / (2 ** 16 - 1)
 
     # gamma compression, exposure correction
+
     exposure_steps = 0.0
     rgb *= 2 ** exposure_steps
     rgb = oklab.linear_to_srgb(rgb, clamp=True)
@@ -518,6 +522,7 @@ def load_raw_image_arrays(raw_filenames):
             image, raw_pixels = process_raw(filename, denoise=False)
             image_arrays.append(image)
             rotations.append((roll_angle, pitch_angle))
+            print("Light range:", np.min(image[..., :3]), np.max(image[..., :3]))
     return image_arrays, rotations
 
 
@@ -527,7 +532,8 @@ def load_jpeg_image_array(jpeg_file):
     new_pix = np.empty((pix.shape[0], pix.shape[1], 4), dtype=np.float32)
     new_pix[..., :3] = pix / 255.0
     new_pix[..., 3] = 1.0
-    return new_pix
+    return [new_pix], [(0.0, 0.0)]
 
 
-build_panorama([load_jpeg_image_array("test/dxo.jpg")], [(0.0, 0.0)])
+# build_panorama(*load_jpeg_image_array("test/dxo.jpg"))
+build_panorama(*load_raw_image_arrays(glob.glob("raws5/*.orf")))
