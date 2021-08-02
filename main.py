@@ -483,9 +483,8 @@ def build_panorama(image_arrays, rotations):
                 params["rot"][img_i],
                 params["fov"],
             )
-        final = out_cl.to_numpy()[::2, ::2, :]
-        final[..., 3] = 1.0
-        return (final * 255.0).astype("uint8")
+
+        return out_cl
 
     import gui
 
@@ -500,13 +499,14 @@ def build_panorama(image_arrays, rotations):
     # sensor_diagonal = 21.6
 
     gui.generate_image_data = new_image_data
-    gui.main(
-        [i / len(image_arrays) for i in range(len(image_arrays))],
-        # v[0]=roll, v[1]=pitch
-        [v[1] / 180 for v in rotations],
-        [v[0] / 180 for v in rotations],
-        np.arctan(sensor_horizontal / 2 / focal_distance) * 180.0 / np.pi * 2.0,
-    )
+    # gui.main(
+    #     [i / len(image_arrays) for i in range(len(image_arrays))],
+    #     # v[0]=roll, v[1]=pitch
+    #     [v[1] / 180 for v in rotations],
+    #     [v[0] / 180 for v in rotations],
+    #     np.arctan(sensor_horizontal / 2 / focal_distance) * 180.0 / np.pi * 2.0,
+    # )
+    gui.run()
 
 
 def load_raw_image_arrays(raw_filenames):

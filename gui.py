@@ -5,7 +5,7 @@ import ctypes
 import imgui
 import numpy as np
 import pyglet
-from imgui.integrations.pyglet import create_renderer
+from imgui.integrations.pyglet import create_renderer, PygletRenderer
 from pyglet import gl
 
 
@@ -15,60 +15,60 @@ def generate_image_data(width, height, params):
     return r_image
 
 
-def get_pyglet_rgba_texture(width, height, params):
-    r_image = generate_image_data(width, height, params)
-    r_image.reshape((width * height * 4,))
+def numpy_to_gl(arr):
+    assert len(arr.shape) == 3
+    assert arr.dtype == np.uint8
+    arr = arr.reshape((arr.shape[0] * arr.shape[1] * 4,))
     c_glu_p = ctypes.POINTER(gl.GLubyte)
-    gr_image = r_image.ctypes.data_as(c_glu_p)
-    # TODO: pyglet.image.ImageData.set_data(self, format, pitch, data)
-    # https://pythonhosted.org/pyglet/api/pyglet.image.ImageData-class.html
-    tx = pyglet.image.ImageData(width, height, "RGBA", gr_image, pitch=width * 4 * 1).get_texture()
-    return tx
+    return arr.ctypes.data_as(c_glu_p)
 
 
-# ----- Globals
+def get_pyglet_rgba_texture(width, height, params, tex):
+    out_cl = generate_image_data(width, height, params)
 
-background_texture = None
-any_changed = False
-x_loc_sliders = None
-y_loc_sliders = None
-x_optics = None
-y_optics = None
-r_loc_sliders = None
-p_fov = 140.0
+    final = out_cl.to_numpy()[::2, ::2, :]
+    final[..., 3] = 1.0
+
+    # out_d = (gl.GLubyte * r_image.size).from_buffer(r_image)
+    tex.set_data("RGBA", width * 4, numpy_to_gl((final * 255.0).astype("uint8")))
 
 
-def main(x_pos_sliders, y_pos_sliders, r_pos_sliders, pm_fov):
-    window = pyglet.window.Window(width=1024, height=512, resizable=False)
-    gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-    imgui.create_context()
-    impl = create_renderer(window)
+class UI:
+    def __init__(self, window):
+        imgui.create_context()
+        self.impl = PygletRenderer(window)
 
-    global x_loc_sliders
-    global y_loc_sliders
-    global x_optics
-    global y_optics
-    global r_loc_sliders
-    global p_fov
-    x_loc_sliders = x_pos_sliders
-    y_loc_sliders = y_pos_sliders
-    r_loc_sliders = r_pos_sliders
-    x_optics = [0] * len(x_loc_sliders)
-    y_optics = [0] * len(x_loc_sliders)
-    p_fov = pm_fov
+        gl.glClearColor(0.0, 0.0, 0.0, 1.0)
 
-    def update(dt):
-        global background_texture
-        global x_loc_sliders
-        global y_loc_sliders
-        global x_optics
-        global y_optics
-        global r_loc_sliders
-        global any_changed
-        global p_fov
+        self.p_fov = 120.0
+        self.x_loc_sliders = [0.0]
+        self.y_loc_sliders = [0.0]
+        self.r_loc_sliders = [0.0]
+        self.x_optics = [0] * len(self.x_loc_sliders)
+        self.y_optics = [0] * len(self.x_loc_sliders)
+
+        self.width = window.width
+        self.height = window.height
+
+        # Set background texture to black
+        self.background_texture = pyglet.image.ImageData(
+            self.width,
+            self.height,
+            "RGBA",
+            numpy_to_gl(np.zeros((self.width, self.height, 4)).astype(np.uint8)),
+            pitch=self.width * 4,
+        )
+
+        self.bg_id = self.background_texture.get_texture().id
+        print("bg:", self.background_texture.pitch, self.background_texture.format)
+
+        self.any_changed = False
+
+    def render(self):
+
+        io = imgui.get_io()
 
         imgui.new_frame()
-        io = imgui.get_io()
 
         # ----- Background image plane
 
@@ -89,7 +89,7 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders, pm_fov):
             | imgui.WINDOW_NO_BRING_TO_FRONT_ON_FOCUS
             | imgui.WINDOW_NO_TITLE_BAR,
         )
-        imgui.image(background_texture.id, 1024.0, 512.0)
+        imgui.image(self.background_texture.get_texture().id, 1024.0, 512.0)
         imgui.end()
         imgui.pop_style_var()
 
@@ -102,71 +102,80 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders, pm_fov):
             False,
             flags=imgui.WINDOW_NO_COLLAPSE
             | imgui.WINDOW_NO_RESIZE
-            # | imgui.WINDOW_ALWAYS_AUTO_RESIZE
             | imgui.WINDOW_NO_TITLE_BAR
-            | imgui.WINDOW_HORIZONTAL_SCROLLING_BAR
+            | imgui.WINDOW_HORIZONTAL_SCROLLING_BAR,
         )
-        # imgui.text("Bar")
-        # imgui.same_line()
-        # imgui.text_colored("Eggs", 0.2, 1.0, 0.0)
 
-        # if imgui.button("Test"):
-        #     print("Mouse:", io.mouse_pos)
-
-        for sld_i, sld in enumerate(x_loc_sliders):
-            change, x_loc_sliders[sld_i] = imgui.slider_float(
-                f"X{sld_i}", x_loc_sliders[sld_i], 0.0, 1.0
+        for sld_i, sld in enumerate(self.x_loc_sliders):
+            change, self.x_loc_sliders[sld_i] = imgui.slider_float(
+                f"X{sld_i}", self.x_loc_sliders[sld_i], 0.0, 1.0
             )
             any_changed |= change
-            change, y_loc_sliders[sld_i] = imgui.slider_float(
-                f"Y{sld_i}", y_loc_sliders[sld_i], -0.5, 0.5
+            change, self.y_loc_sliders[sld_i] = imgui.slider_float(
+                f"Y{sld_i}", self.y_loc_sliders[sld_i], -0.5, 0.5
             )
             any_changed |= change
             # change, x_optics[sld_i] = imgui.slider_float(f"Xo{sld_i}", x_optics[sld_i], -0.5, 0.5)
             # any_changed |= change
             # change, y_optics[sld_i] = imgui.slider_float(f"Yo{sld_i}", y_optics[sld_i], -0.5, 0.5)
             # any_changed |= change
-            change, r_loc_sliders[sld_i] = imgui.slider_float(
-                f"R{sld_i}", r_loc_sliders[sld_i], -0.5, 0.5
+            change, self.r_loc_sliders[sld_i] = imgui.slider_float(
+                f"R{sld_i}", self.r_loc_sliders[sld_i], -0.5, 0.5
             )
             any_changed |= change
             imgui.dummy(0.0, 5.0)
 
-        change, p_fov = imgui.slider_float("FOV", p_fov, 0.0, 360.0)
+        change, self.p_fov = imgui.slider_float("FOV", self.p_fov, 0.0, 360.0)
         any_changed |= change
+        self.any_changed = any_changed
 
         imgui.end()
 
-    def draw(dt):
-        global any_changed
-        global background_texture
-        global x_loc_sliders
-        global y_loc_sliders
-        global x_optics
-        global y_optics
-        global r_loc_sliders
-        global p_fov
+        imgui.end_frame()
 
-        if any_changed or background_texture is None:
-            # print(x_loc_sliders, y_loc_sliders, r_loc_sliders, p_fov)
-            background_texture = get_pyglet_rgba_texture(
+        imgui.render()
+        self.impl.render(imgui.get_draw_data())
+
+        if self.any_changed:
+            # print("redraw")
+            get_pyglet_rgba_texture(
                 1024,
                 512,
                 {
-                    "x_locs": x_loc_sliders,
-                    "y_locs": y_loc_sliders,
-                    "x_optic": x_optics,
-                    "y_optic": y_optics,
-                    "rot": r_loc_sliders,
-                    "fov": p_fov,
+                    "x_locs": self.x_loc_sliders,
+                    "y_locs": self.y_loc_sliders,
+                    "x_optic": self.x_optics,
+                    "y_optic": self.y_optics,
+                    "rot": self.r_loc_sliders,
+                    "fov": self.p_fov,
                 },
+                self.background_texture,
             )
+            # self.background_texture.set_data(
+            #     "RGBA",
+            #     self.width * 4,
+            #     numpy_to_gl(
+            #         np.random.random_integers(255, size=(self.width, self.height, 4)).astype(
+            #             np.uint8
+            #         )
+            #     ),
+            # )
 
-        update(dt)
-        window.clear()
-        imgui.render()
-        impl.render(imgui.get_draw_data())
 
-    pyglet.clock.schedule_interval(draw, 1 / 60.0)
+class App(pyglet.window.Window):
+    def __init__(self):
+        super().__init__(width=1024, height=512, resizable=False)
+        pyglet.clock.schedule_interval(self.update, 1 / 60)
+        self.UI_test = UI(self)
+
+    def on_draw(self):
+        pass
+
+    def update(self, dt):
+        # self.clear()
+        self.UI_test.render()
+
+
+def run():
+    app = App()
     pyglet.app.run()
-    impl.shutdown()
