@@ -1,4 +1,3 @@
-import glob
 import os
 
 import cv2
@@ -459,6 +458,7 @@ def get_tilt(filename):
 # show_exif(raws[i])
 
 
+# import glob
 # raws = glob.glob("D:/photo/2021.7/pano2/*.orf")
 # raws = glob.glob("D:/swap/downloads/*.orf")
 # raws = glob.glob("test/P7240158.orf")
@@ -535,5 +535,5 @@ def load_jpeg_image_array(jpeg_file):
     return [new_pix], [(0.0, 0.0)]
 
 
-# build_panorama(*load_jpeg_image_array("test/dxo.jpg"))
-build_panorama(*load_raw_image_arrays(glob.glob("raws5/*.orf")))
+build_panorama(*load_jpeg_image_array("test/dxo.jpg"))
+# build_panorama(*load_raw_image_arrays(glob.glob("raws5/*.orf")))

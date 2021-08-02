@@ -148,7 +148,7 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders, pm_fov):
         global p_fov
 
         if any_changed or background_texture is None:
-            print(x_loc_sliders, y_loc_sliders, r_loc_sliders, p_fov)
+            # print(x_loc_sliders, y_loc_sliders, r_loc_sliders, p_fov)
             background_texture = get_pyglet_rgba_texture(
                 1024,
                 512,
@@ -170,4 +170,3 @@ def main(x_pos_sliders, y_pos_sliders, r_pos_sliders, pm_fov):
     pyglet.clock.schedule_interval(draw, 1 / 60.0)
     pyglet.app.run()
     impl.shutdown()
-
